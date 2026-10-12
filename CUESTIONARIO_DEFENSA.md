@@ -1,67 +1,155 @@
-# Cuestionario para la defensa del TP3
+# Guia practica para la defensa del TP3
 
-Guia basada en la rubrica de defensa y en el codigo entregado. Para practicar, leer primero solo la pregunta, responder en voz alta sin mirar el codigo y luego comparar con la respuesta esperada.
+Esta guia esta pensada para entender el proyecto, no para memorizar 80 respuestas sueltas.
+Estudien en este orden:
 
-## Como responder en la defensa
+1. Lean el mapa general y aprendan las cinco ideas esenciales.
+2. Dibujen el ejemplo de `P = 60` en papel.
+3. Expliquen cada bloque en voz alta sin mirar el codigo.
+4. Ejecuten la demostracion practica.
+5. Hagan el simulacro de 15 minutos entre los integrantes.
 
-Una respuesta completa deberia seguir este orden:
+En la defensa conviene responder siempre con esta estructura:
 
-1. Decir la idea o invariante.
-2. Aplicarla al ejemplo concreto.
-3. Indicar su costo en paginas leidas o escritas.
-4. Relacionarla con el metodo del codigo que la implementa.
+1. **Idea:** que hace y por que.
+2. **Ejemplo:** aplicarla al arbol de `P = 60`.
+3. **Costo:** paginas leidas o escritas.
+4. **Codigo:** metodo que la implementa.
 
-No alcanza con decir que un metodo "busca" o "divide". Hay que explicar por que se eligio ese diseno y que propiedad preserva.
+## 1. Mapa general del proyecto
 
-## 1. Representacion fisica, M y L - 5 puntos
-
-### 1. ¿Que representa una pagina de `indice.dat`?
-
-Es la unidad fija de almacenamiento y de E/S del arbol. La pagina 0 es la cabecera y las paginas 1 en adelante son nodos hoja o internos. Cada pagina ocupa exactamente `P` bytes.
-
-### 2. ¿En que byte comienza la pagina numero `k`?
-
-En el byte `k * P`. El codigo hace `archivo.seek((long) pagina * tamPagina)` tanto para leer como para escribir (`ArbolBMas.java`, metodos `leerNodo` y `escribirNodo`). El cast a `long` evita overflow en la multiplicacion.
-
-### 3. ¿Que contiene la cabecera y cuanto ocupa?
-
-Ocupa toda la pagina 0. Sus primeros 40 bytes contienen:
-
-| Offset | Tipo | Campo |
-|---:|:---:|:---|
-| 0 | `int` | `MAGIC = 0x41454433` |
-| 4 | `int` | version 1 |
-| 8 | `int` | `P` |
-| 12 | `int` | `M` |
-| 16 | `int` | `L` |
-| 20 | `int` | pagina raiz |
-| 24 | `int` | cantidad de paginas, incluida la cabecera |
-| 28 | `int` | niveles |
-| 32 | `long` | cantidad de claves |
-
-Los bytes restantes se escriben en cero porque `escribirCabecera` crea un arreglo nuevo de `P` bytes.
-
-### 4. ¿Como se representa una hoja?
-
-Tiene 12 bytes comunes: `tipo = 0`, `n` y `siguiente`. Desde el offset 12 guarda pares de 16 bytes: una clave `long` en `12 + 16i` y una posicion `long` en `20 + 16i`. `siguiente` enlaza la proxima hoja o vale `-1`.
-
-### 5. ¿Como se representa un nodo interno?
-
-Tiene `tipo = 1`, `n` claves y `siguiente = -1`. Reserva primero espacio para los `M` hijos `int`, desde `12 + 4i`. Las claves `long` empiezan siempre en `12 + 4M + 8i`, aunque el nodo no este lleno. Con `n` claves usa `n + 1` hijos.
-
-### 6. Deduzca `L` sin leer el codigo.
-
-Una hoja necesita `12 + 16L <= P`. Por lo tanto:
+El programa transforma un archivo real de IMDb en dos archivos persistentes:
 
 ```text
+title.basics.tsv.gz
+        |
+        | BMasApp construir
+        v
++------------------+       +------------------+
+| datos.dat        |       | indice.dat       |
+| registros IMDb   |       | arbol B+         |
+| de largo variable|       | clave -> posicion|
++------------------+       +------------------+
+          ^                         |
+          | posicion                | buscar(clave)
+          +-------------------------+
+```
+
+Ejemplo: para buscar `tt0111161`, el arbol usa la clave `111161`, encuentra una posicion de
+`datos.dat` y `ArchivoDatos.leer(posicion)` recupera la linea completa.
+
+### Los archivos importantes
+
+| Archivo | Responsabilidad |
+|---|---|
+| `ArbolBMas.java` | Arbol B+ persistente, busqueda, insercion, rango y validacion |
+| `ArchivoDatos.java` | Escritura y lectura de registros variables en `datos.dat` |
+| `BMasApp.java` | Comandos para construir y consultar los archivos |
+| `ExperimentoBMas.java` | Genera las tablas A, B, C y D |
+| `TestArbolBMas.java` | Ejecuta los 12 casos obligatorios |
+
+## 2. Las cinco ideas que no pueden faltar
+
+### Idea 1: el arbol vive en disco
+
+`indice.dat` se divide en paginas de `P` bytes. La pagina 0 es la cabecera y las paginas siguientes
+son nodos. La pagina `k` comienza en:
+
+```text
+posicion = k * P
+```
+
+El numero de pagina es una direccion persistente. Una referencia Java no sirve porque desaparece
+al cerrar el programa.
+
+**Respuesta corta para la defensa:**
+
+> El arbol no se serializa al final ni se carga completo en RAM. Cada nodo es una pagina de
+> `indice.dat`; se localiza con `k * P` y las paginas modificadas se escriben antes de terminar
+> cada insercion.
+
+### Idea 2: los datos estan solamente en las hojas
+
+Los internos sirven para elegir un camino. Las hojas contienen los pares `clave -> posicion` y
+estan enlazadas para resolver rangos.
+
+```text
+              interno: separadores
+                    [50]
+                   /    \
+                  /      \
+hojas: [10,20,30]  ->  [50,60,80]  ->  -1
+```
+
+### Idea 3: una busqueda lee una pagina por nivel
+
+En un interno se elige el hijo segun los separadores. En la hoja se busca la clave. Si el arbol
+tiene tres niveles, una busqueda lee tres paginas aunque la clave no exista.
+
+### Idea 4: copiar en hoja, mover en interno
+
+- Al dividir una **hoja**, la primera clave de la hoja derecha se **copia** al padre. Sigue en la
+  hoja porque los datos deben permanecer en las hojas.
+- Al dividir un **interno**, la clave central se **mueve** al padre. Desaparece de los dos internos
+  resultantes porque ahora separa ambos subarboles desde arriba.
+
+### Idea 5: un rango baja una vez y despues sigue las hojas
+
+`buscarRango` hace un solo camino raiz-hoja. Luego usa el campo `siguiente` de cada hoja. No hace
+una busqueda completa por cada resultado.
+
+## 3. Como esta guardado `indice.dat`
+
+### 3.1 Cabecera: pagina 0
+
+La pagina 0 ocupa `P` bytes. Los primeros 40 contienen:
+
+| Offset | Tipo | Campo |
+|---:|:---:|---|
+| 0 | `int` | `MAGIC = 0x41454433` |
+| 4 | `int` | version 1 |
+| 8 | `int` | `P`, tamano de pagina |
+| 12 | `int` | `M`, maximo de hijos de un interno |
+| 16 | `int` | `L`, maximo de pares de una hoja |
+| 20 | `int` | numero de pagina de la raiz |
+| 24 | `int` | cantidad total de paginas |
+| 28 | `int` | cantidad de niveles |
+| 32 | `long` | cantidad de claves |
+
+`MAGIC` y la version permiten detectar que un archivo no tiene el formato esperado.
+
+### 3.2 Pagina hoja
+
+```text
+offset 0       4       8       12
+       +-------+-------+-------+-------------------------------+
+       |tipo=0 |   n   | sig   | clave0,pos0 | clave1,pos1 ... |
+       +-------+-------+-------+-------------------------------+
+          int     int     int        16 bytes por par
+```
+
+- `n`: cantidad de pares usados.
+- `sig`: pagina de la hoja siguiente; `-1` en la ultima.
+- Cada par usa 16 bytes: `long clave` y `long posicion`.
+
+Por eso:
+
+```text
+12 + 16L <= P
 L = floor((P - 12) / 16)
 ```
 
-Se toma el mayor entero que cabe.
+### 3.3 Pagina interna
 
-### 7. Deduzca `M` sin leer el codigo.
+```text
++-------+-------+-------+----------------+--------------------+
+|tipo=1 |   n   |  -1   | M hijos int   | M-1 claves long   |
++-------+-------+-------+----------------+--------------------+
+  4 B      4 B     4 B       4M B             8(M-1) B
+```
 
-Un interno reserva `M` hijos y `M - 1` claves:
+Con `n` claves hay `n + 1` hijos. El bloque reserva siempre lugar para `M` hijos, incluso cuando
+el nodo no esta lleno.
 
 ```text
 12 + 4M + 8(M - 1) <= P
@@ -69,389 +157,505 @@ Un interno reserva `M` hijos y `M - 1` claves:
 M = floor((P - 4) / 12)
 ```
 
-### 8. Calcule `M`, `L` y los bytes libres para `P = 60`.
+### 3.4 Valores que deben saber calcular
 
-`L = floor(48/16) = 3`. La hoja usa `12 + 3*16 = 60`, sin bytes libres.
+| P | L | Libre en hoja | M | Libre en interno |
+|---:|---:|---:|---:|---:|
+| 60 | 3 | 0 bytes | 4 | 8 bytes |
+| 4096 | 255 | 4 bytes | 341 | 0 bytes |
 
-`M = floor(56/12) = 4`. El interno usa `4 + 12*4 = 52`, por lo que quedan 8 bytes libres.
+`M` y `L` son distintos porque una hoja usa dos `long` por entrada, mientras que el crecimiento
+de un interno combina aproximadamente un hijo `int` y una clave `long`.
 
-### 9. Calcule `M`, `L` y los bytes libres para `P = 4096`.
+### Practica rapida
 
-`L = floor(4084/16) = 255`. La hoja usa 4092 bytes y deja 4.
+Sin mirar la respuesta, expliquen:
 
-`M = floor(4092/12) = 341`. El interno usa exactamente 4096 bytes y no deja espacio.
+1. ¿Donde comienza la pagina 7 si `P = 60`? En el byte `7 * 60 = 420`.
+2. ¿Por que la hoja necesita 12 bytes antes de los pares? Por `tipo`, `n` y `siguiente`.
+3. ¿Por que los arreglos internos tienen una posicion extra? Para alojar temporalmente el elemento
+   que provoca overflow antes del split.
 
-### 10. ¿Por que `M` no es igual a `L`?
+## 4. Busqueda paso a paso
 
-Porque las entradas tienen formatos distintos. Una hoja usa 16 bytes por par, dos `long`. En un interno, cada aumento del fan-out cuesta aproximadamente 12 bytes: un hijo `int` y una clave `long`, con una clave menos que hijos.
+Usaremos este arbol final de la guia:
 
-### 11. ¿Por que los bytes se interpretan en big-endian?
+```text
+Nivel 1:                         #8(50)
+                               /       \
+Nivel 2:             #3(20,30,40)      #7(80)
+                     /   |   |   \       /   \
+Nivel 3: #1[10,15] #9[20,25] #5[30,35] #6[40,45] #2[50,60,70] #4[80,90]
+            ->          ->          ->          ->          ->          -> -1
+```
 
-Es el formato exigido. `RandomAccessFile` y `ByteBuffer` usan big-endian por defecto, por eso no se configura otro orden.
+### Regla para elegir un hijo
 
-### 12. ¿Por que los nodos apuntan con numeros de pagina y no con referencias Java?
+El hijo elegido es la cantidad de separadores `<= x`. La igualdad va a la derecha porque el
+separador representa la menor clave del subarbol derecho.
 
-Porque las referencias Java no sobreviven al cierre del proceso ni identifican una posicion estable en disco. El numero permite recuperar un nodo con `seek(pagina * P)` en una ejecucion posterior.
+### Ejemplo: `buscar(35)`
 
-### 13. ¿Para que los arreglos de `Nodo` tienen una posicion adicional?
+1. Lee `#8`: `35 < 50`, baja a `#3`.
+2. Lee `#3`: `30 <= 35 < 40`, baja al hijo 2, `#5`.
+3. Lee `#5`: encuentra `35` con posicion `350`.
 
-Una hoja reserva `L + 1` claves y posiciones, y un interno puede alojar temporalmente `M` claves y `M + 1` hijos. Eso permite insertar primero el elemento que causa overflow y luego dividir el nodo en memoria.
+```text
+camino = #8 -> #3 -> #5
+costo = 3 paginas = niveles()
+```
 
-### 14. ¿Que tamanos de pagina rechaza la implementacion?
+Si se busca `33`, recorre el mismo camino y retorna `-1`. Una ausencia tambien cuesta un camino
+completo.
 
-Rechaza `P < 40`, `L < 2` o `M < 3`. Con las formulas actuales, por ejemplo `P = 40` todavia da `L = 1`, por lo que tambien es invalido. La validacion esta en `crear` y se vuelve a comprobar al abrir.
+**Pregunta frecuente:** ¿por que se usa busqueda binaria dentro de cada pagina?
 
-## 2. Busquedas, inserciones y trazas - 7 puntos
+**Respuesta:** porque las claves estan ordenadas. Reduce las comparaciones dentro del nodo, aunque
+la medida principal del TP siga siendo la cantidad de paginas transferidas.
 
-### 15. En un interno, ¿como se elige el hijo para buscar `x`?
+## 5. Insercion y divisiones
 
-Se elige el hijo cuyo indice es la cantidad de separadores menores o iguales que `x`. Es una busqueda binaria tipo limite superior: avanza a la derecha cuando `clave[medio] <= x`. Esto implementa los intervalos `x < k0`, `k0 <= x < k1`, etc.
+### 5.1 Insercion sin division
 
-### 16. ¿Por que la igualdad baja por el hijo derecho del separador?
+1. Baja hasta una hoja y guarda el camino.
+2. Si la clave existe, retorna `false` y no escribe nada.
+3. Si hay lugar, inserta ordenadamente y escribe solo esa hoja.
 
-Porque en un B+ el separador es la menor clave del subarbol derecho. Por I2, esa clave pertenece al intervalo derecho. En el split de hoja el separador se copia al padre pero el dato permanece en la hoja derecha.
+Costo sin split:
 
-### 17. ¿Cuantas paginas lee `buscar`?
+```text
+lecturas = niveles()
+escrituras = 1
+```
 
-Exactamente una por nivel, exista o no la clave: `niveles()` lecturas. No relee nodos ni carga el archivo completo.
+### 5.2 Split de hoja
 
-### 18. Trace `buscar(35)` sobre el arbol final de la guia.
+Cuando hay `L + 1` pares en memoria:
 
-Lee `#8`, compara con 50 y baja al hijo izquierdo `#3`. En `#3`, como `30 <= 35 < 40`, toma el hijo 2, `#5`. En `#5` encuentra `35:350`. Camino: `#8 -> #3 -> #5`; costo: 3 lecturas.
+1. La original conserva `ceil((L + 1)/2)` pares.
+2. El resto pasa a una hoja nueva.
+3. `nueva.siguiente` recibe el antiguo `original.siguiente`.
+4. `original.siguiente` pasa a ser la pagina nueva.
+5. La primera clave de la nueva se copia al padre.
 
-### 19. ¿Que ocurre al buscar una clave inexistente como 33?
+Ejemplo:
 
-Recorre igualmente un camino completo hasta una hoja. En el arbol final llega a `#5`, no encuentra 33 y retorna `-1`. Cuesta 3 lecturas.
+```text
+Antes:       #5[30,35,40] -> #2
+Insertar 45: [30,35,40,45]
 
-### 20. ¿Que hace `insertar` antes de modificar una hoja?
+Despues:     #5[30,35] -> #6[40,45] -> #2
+                              |
+                              +-- se copia 40 al padre
+```
 
-Baja como una busqueda, guarda en arreglos los nodos, numeros de pagina e indices de hijo del camino. En la hoja busca la primera clave mayor o igual. Si encuentra un duplicado retorna `false` sin escribir; si no, inserta ordenadamente.
+### 5.3 Split de interno
 
-### 21. ¿Cuanta memoria de paginas usa una insercion?
+Un interno desborda con `M` claves y `M + 1` hijos temporales:
 
-Guarda como maximo las paginas del camino raiz-hoja, por lo que usa `O(h)` paginas temporales. El arbol completo nunca se representa como objetos enlazados en RAM.
+1. El original conserva los primeros `ceil((M + 1)/2)` hijos.
+2. La clave central sube al padre y desaparece de ambos internos.
+3. Lo restante pasa a un interno nuevo.
 
-### 22. Explique exactamente un split de hoja.
+### 5.4 La insercion de 45 que deben saber dibujar
 
-Con `L + 1` pares, la hoja original conserva los primeros `ceil((L + 1)/2)` y el resto va a una hoja nueva. La nueva hereda el antiguo `siguiente`; luego la original apunta a la nueva. La primera clave de la hoja nueva se copia al padre y permanece en la hoja.
+Antes de insertar, la raiz es `#3(30,50,80)` y la hoja destino es `#5[30,35,40]`.
 
-### 23. ¿Por que el separador de una hoja se copia y no se mueve?
+1. Se leen `#3` y `#5`: 2 lecturas.
+2. `#5` se divide en `#5[30,35]` y la nueva `#6[40,45]`.
+3. Se copia 40 al padre.
+4. `#3` queda temporalmente con claves `30,40,50,80` y cinco hijos.
+5. `#3` se divide: queda `#3(30,40)` y nace `#7(80)`.
+6. La clave 50 se mueve hacia arriba.
+7. Como ya no hay padre, nace la raiz `#8(50)`.
 
-Porque I1 exige que todos los datos esten en hojas. El interno solo guia la busqueda; la clave y su posicion deben seguir en una hoja.
+```text
+Paginas nuevas, en orden: #6 hoja, #7 interno, #8 raiz
+Splits: s = 2
+Escrituras: 2s + 1 = 5
+```
 
-### 24. ¿Como se reenlaza una hoja intermedia?
+### Contrato general de E/S
 
-Primero `nueva.siguiente = original.siguiente` y despues `original.siguiente = paginaNueva`. El orden conceptual evita perder la referencia al resto de la cadena. Por ejemplo, al dividir `#1` entre `#1` y `#2`, la nueva `#5` deja la cadena `#1 -> #5 -> #2`.
+```text
+lecturas = h = niveles()
+escrituras = 2s + 1
+```
 
-### 25. Explique exactamente un split de interno.
+Cada split escribe el nodo original y el nuevo. La escritura restante corresponde al ultimo padre
+que absorbe el separador o a la nueva raiz. La cabecera no cuenta como pagina de nodo.
 
-Cuando hay `M` claves y `M + 1` hijos temporales, el original conserva los primeros `ceil((M + 1)/2)` hijos y las claves entre ellos. La clave siguiente sube al padre y desaparece de ambos nodos divididos. Los hijos y claves restantes van al nuevo interno.
+### Diferencias que suelen preguntar
 
-### 26. ¿Por que la clave central del interno se mueve y no se copia?
+| Caso | Que pasa |
+|---|---|
+| Duplicado | `h` lecturas, 0 escrituras, no cambia la cantidad de claves |
+| Sin split | `h` lecturas, 1 escritura |
+| Split de hoja | El separador se copia |
+| Split de interno | La clave central se mueve |
+| Split de raiz | Se crea una raiz y aumenta un nivel |
 
-En un interno esa clave solo es un separador entre dos subarboles. Despues de la division pasa a separar los dos internos desde el padre. Dejarla tambien en uno de ellos alteraria la relacion entre claves e hijos y las cotas de I2.
+## 6. Busqueda por rango
 
-### 27. ¿Como se asignan paginas nuevas?
+### Algoritmo
 
-Siempre al final: el numero nuevo es `cantidadPaginas` y luego se incrementa. En una propagacion se asignan de abajo hacia arriba: nueva hoja, nuevos internos y finalmente nueva raiz.
+1. Baja una vez hasta la hoja donde estaria `desde`.
+2. Entrega las claves del intervalo `[desde, hasta]`.
+3. Continua por la cadena de hojas.
+4. Se detiene al ver una clave `> hasta`, llegar a `-1` o terminar una hoja cuya ultima clave
+   sea `>= hasta`.
 
-### 28. ¿Que ocurre si el separador llega por encima de la raiz?
+Solo pasa a la hoja siguiente cuando la ultima clave de la actual es `< hasta`.
 
-Se crea una nueva raiz interna con una clave y dos hijos: la raiz anterior y la pagina derecha generada por su split. La pagina nueva se vuelve `raiz` y `niveles` aumenta en uno.
+### Ejemplo: `buscarRango(22, 62)`
 
-### 29. Trace la insercion de 45 del ejemplo.
+```text
+Descenso: #8 -> #3 -> #9
+Cadena:                   #9 -> #5 -> #6 -> #2
+Entrega:                  25   30 35  40 45  50 60
+```
 
-La busqueda lee `#3` y `#5`: 2 lecturas. La hoja `#5`, con `[30,35,40]`, recibe 45 y se divide en `#5[30,35]` y la nueva `#6[40,45]`; sube una copia de 40. El padre `#3` queda temporalmente con 4 claves y 5 hijos, se divide: `#3(30,40)`, nueva `#7(80)`, y 50 sube, desapareciendo de esos internos. Se crea la raiz nueva `#8(50)`. Se asignan `#6`, `#7`, `#8`, en ese orden. Hay 2 splits y se escriben `2*2 + 1 = 5` paginas.
+En `#2` ve 70, que es mayor que 62, y termina. Lee 6 paginas: 3 del descenso y 3 hojas
+adicionales.
 
-### 30. ¿Cual es el contrato de E/S de una insercion?
+### Ejemplo de parada exacta: `buscarRango(20, 45)`
 
-Lee `h = niveles()` paginas. Si hay `s` divisiones, escribe `2s + 1`: dos por cada nodo dividido y una por el ultimo padre que absorbe el separador o por la nueva raiz. La cabecera puede escribirse, pero no cuenta como pagina de nodo.
+Termina en `#6`, porque su ultima clave es 45. No lee `#2`: todas sus claves son posteriores y no
+pueden pertenecer al rango.
 
-### 31. ¿Por que una insercion sin split escribe una sola pagina?
+**Respuesta corta para la defensa:**
 
-Solo cambia la hoja destino. El camino interno ya leido no se modifica ni debe reescribirse.
+> El costo es `h` paginas para el descenso, incluida la primera hoja, mas las hojas adicionales
+> necesarias. Es mejor que hacer una busqueda independiente por cada resultado.
 
-### 32. ¿Que costo tiene insertar un duplicado?
+## 7. Persistencia y validacion
 
-Lee un camino completo, retorna `false`, no cambia `cantidadClaves`, no reserva paginas y escribe cero nodos.
+### Crear
 
-### 33. ¿Como funciona `buscarRango`?
+Un arbol nuevo tiene:
 
-Hace un unico descenso desde la raiz hasta la hoja donde estaria `desde`. En esa hoja empieza en la primera clave mayor o igual a `desde`, entrega pares hasta `hasta` y continua por `siguiente` sin volver a la raiz.
+```text
+#0 = cabecera
+#1 = raiz hoja vacia
+paginas = 2
+niveles = 1
+claves = 0
+```
 
-### 34. ¿Cual es la regla exacta de parada del rango?
+### Abrir
 
-Se detiene si encuentra una clave mayor que `hasta`, si `siguiente == -1`, o si la ultima clave de la hoja actual es mayor o igual a `hasta`. Solo lee la hoja siguiente cuando la ultima clave actual es menor que `hasta`.
+`abrir` lee solo la cabecera. Recupera `P`, `M`, `L`, raiz, paginas, niveles y claves. Luego puede
+localizar cualquier nodo por su numero de pagina, sin reconstruir el indice desde el TSV.
 
-### 35. Trace `buscarRango(22, 62)`.
+Valida, entre otras cosas:
 
-Desciende `#8 -> #3 -> #9`; entrega 25 y sigue `#5 -> #6 -> #2`, donde entrega 50 y 60 y se detiene al ver 70. Resultado: `25 30 35 40 45 50 60`. Lee 6 paginas: 3 del descenso y 3 hojas adicionales.
+- `MAGIC` y version.
+- Capacidades `M` y `L` coherentes con `P`.
+- Raiz, paginas, niveles y claves validos.
+- Largo exacto `cantidadPaginas * P`.
 
-### 36. ¿Por que `buscarRango(20, 45)` no lee la hoja `#2`?
+`FormatoInvalidoException` extiende `IOException` porque el problema proviene de un archivo
+externo posiblemente corrupto o incompatible. Un rango invertido y un tamano de pagina invalido
+son errores de precondicion y usan excepciones no chequeadas.
 
-En `#6` entrega 40 y 45. Como su ultima clave es 45, que ya es `>= hasta`, sabe que ninguna hoja posterior puede aportar una clave dentro del rango. Termina con 5 lecturas.
+### Las cinco invariantes
 
-### 37. Enumere las invariantes I1-I5.
+| Invariante | Explicacion simple |
+|---|---|
+| I1 | Datos solo en hojas; claves ordenadas, sin repetidos y hojas al mismo nivel |
+| I2 | Para los hijos: `x < k0`, `k0 <= x < k1`, ..., y `x >=` el ultimo separador |
+| I3 | Los nodos respetan ocupacion minima y maxima; la raiz tiene reglas especiales |
+| I4 | Las hojas forman una cadena ordenada terminada en `-1` |
+| I5 | Todos los enlaces son numeros de pagina |
 
-I1: datos solo en hojas, claves ordenadas y unicas, hojas al mismo nivel. I2: separadores y cotas correctas entre hijos. I3: ocupacion minima y maxima, con reglas especiales para la raiz. I4: hojas enlazadas en orden y terminadas en `-1`. I5: referencias fisicas mediante numeros de pagina.
+`verificarInvariantes` tambien comprueba el largo del archivo, paginas validas y alcanzables una
+sola vez, cantidad total de claves y correspondencia de la cadena de hojas.
 
-### 38. ¿Que comprueba `verificarInvariantes` en esta implementacion?
+Los diagnosticos no alteran los contadores porque leen con `contar = false`. Asi una inspeccion no
+contamina la medicion de una operacion.
 
-Comprueba largo del archivo, cabecera basica, referencias validas, paginas alcanzadas una sola vez, claves estrictamente crecientes, cotas de separadores, separador igual a la primera clave del hijo derecho, ocupacion, nivel de hojas, cadena de hojas, cantidad total de claves y que toda pagina de nodos sea alcanzable.
+## 8. Altura y costo
 
-### 39. ¿Por que los diagnosticos no cambian los contadores?
+### Por que el B+ tiene poca altura
 
-`volcarPagina`, `volcarArbol`, `estadisticas` y `verificarInvariantes` llaman a `leerNodo` con `contar = false`. Asi observar o validar el arbol no contamina la operacion que se esta midiendo.
+El fan-out `M` es la cantidad maxima de hijos de un interno. Para `P = 4096`, `M = 341`: cada
+nivel permite elegir entre cientos de subarboles.
 
-## 3. Persistencia - 3 puntos
+Con paginas llenas, la capacidad de un arbol de `h` niveles es:
 
-### 40. ¿Como se crea un arbol vacio?
+```text
+L * M^(h - 1)
+```
 
-Se trunca el archivo, se configura raiz `#1`, 2 paginas totales, un nivel y cero claves. Se escribe la cabecera en `#0` y una hoja vacia en `#1`. La escritura inicial se excluye de los contadores dejandolos en cero.
-
-### 41. ¿Como se reabre sin reconstruir?
-
-`abrir` lee solo los primeros 40 bytes de la cabecera, recupera `P`, `M`, `L`, raiz, cantidad de paginas, niveles y claves, y conserva abierto el `RandomAccessFile`. Las operaciones posteriores llegan a los nodos mediante numeros de pagina.
-
-### 42. ¿Que valida `abrir`?
-
-Valida longitud minima, `MAGIC`, version, `P`, que `M` y `L` coincidan con las formulas, capacidades minimas, raiz y cantidad de paginas validas, niveles y claves, y que el largo sea exactamente `cantidadPaginas * P`. Los nodos se validan cuando se leen o mediante `verificarInvariantes`.
-
-### 43. ¿Por que `FormatoInvalidoException` es chequeada?
-
-Extiende `IOException` porque un archivo externo puede estar truncado, ser de otra version o no ser un indice. Es una condicion recuperable que el llamador debe manejar. En cambio, un rango invertido o un tamano solicitado invalido son errores de precondicion y usan excepciones no chequeadas.
-
-### 44. ¿Que estado se espera despues de cerrar y reabrir el ejemplo completo?
-
-Raiz 8, 3 niveles, 10 paginas, 13 claves y 600 bytes para `P = 60`. `buscar(45)` retorna 450, `buscar(15)` retorna 150 y `verificarInvariantes()` retorna `OK`.
-
-### 45. ¿Por que no se serializa el arbol completo al cerrar?
-
-Porque el objetivo es que el arbol viva siempre en paginas de disco. Cada insercion escribe sus paginas modificadas antes de retornar. Serializar una estructura en RAM al final incumpliria persistencia, memoria `O(h)` y el modelo de costo por pagina.
-
-## 4. Altura, fan-out y accesos a disco - 5 puntos
-
-### 46. ¿Que es el fan-out y por que importa?
-
-Es la cantidad maxima `M` de hijos de un interno. Un `M` grande hace que cada nivel discrimine entre muchos subarboles, reduciendo la altura y por tanto las paginas leidas.
-
-### 47. De una cota para el minimo numero de niveles con `N` claves.
-
-Con paginas llenas, un arbol de `h` niveles guarda como maximo `L * M^(h-1)` claves. Para `N > L`:
+Para `N > L`, la altura minima es:
 
 ```text
 h_min = 1 + ceil(log_M(N/L))
 ```
 
-Para `N <= L`, basta un nivel.
-
-### 48. ¿Como se obtiene la cota de altura maxima?
-
-Sean `lmin = ceil(L/2)` y `mmin = ceil(M/2)`. Para `h >= 2`, la raiz tiene al menos dos hijos y el minimo de claves es:
+Para la altura maxima, con `lmin = ceil(L/2)` y `mmin = ceil(M/2)`, un arbol de `h >= 2` tiene
+como minimo:
 
 ```text
-2 * lmin * mmin^(h-2)
+2 * lmin * mmin^(h - 2) claves
 ```
 
-La altura maxima es el mayor `h` para el que ese minimo no supera `N`.
+### Caso IMDb: 300.000 claves
 
-### 49. ¿Por que el B+ de `P = 4096` tiene 3 niveles con 300.000 claves?
+Con `P = 4096`, `L = 255` y `M = 341`:
 
-Tiene `M = 341` y `L = 255`. Dos niveles llenos solo admiten `255*341 = 86.955` claves, insuficientes. Tres niveles admiten hasta `255*341^2 = 29.650.455`, por lo que 3 niveles alcanzan.
+```text
+2 niveles llenos: 255 * 341   = 86.955       no alcanza
+3 niveles llenos: 255 * 341^2 = 29.651.655   alcanza
+```
 
-### 50. Compare el B+ con un ABB balanceado para 300.000 claves.
+El indice medido tiene 3 niveles. Un ABB balanceado con un nodo por pagina necesitara unas
+`ceil(log2(300001)) = 19` paginas.
 
-El ABB de un nodo por pagina necesita aproximadamente `ceil(log2(300001)) = 19` lecturas. El B+ medido necesita 3 gracias a que cada pagina contiene cientos de claves e hijos.
+```text
+B+  : Theta(log_M N) accesos a disco
+ABB : Theta(log_2 N) accesos si cada nodo ocupa una pagina
+```
 
-### 51. ¿Cual es la complejidad de una busqueda?
+## 9. Como explicar los experimentos
 
-Realiza `Theta(log_M N)` accesos a disco. Dentro de cada pagina usa busqueda binaria; sumando niveles, realiza `Theta(log N)` comparaciones.
+### Tabla A: estructura sintetica
 
-### 52. ¿Por que la insercion creciente deja hojas cerca del 50 %?
+Compara seis tamanos de pagina y dos ordenes de insercion sobre un millon de claves. Muestra que
+un `P` mayor aumenta `M` y `L`, y normalmente reduce altura y cantidad de paginas.
 
-Todas las claves nuevas llegan a la hoja derecha. Cada split deja dos mitades, pero solo la ultima vuelve a llenarse; las hojas anteriores quedan cerca de su ocupacion minima.
+### Tabla B: construccion IMDb
 
-### 53. Prediga la cantidad de hojas para insercion creciente.
+Compara insercion creciente y aleatoria. IMDb llega ordenado por `tconst`.
 
-Para `N > L`, una hoja nueva aparece cada `ceil((L + 1)/2)` inserciones despues de llenar la primera:
+- En creciente, todas las claves nuevas llegan a la ultima hoja. Cada split deja atras una hoja
+  cerca del 50 %.
+- En aleatorio, las inserciones se distribuyen entre hojas parcialmente llenas. En la Tabla A
+  sintetica la ocupacion ronda 69-72 %; en IMDb fue 65,1784 %.
+
+Resultados del proyecto:
+
+| Orden | Hojas | Tamano del indice |
+|---|---:|---:|
+| Creciente | 2343 | 9.658.368 bytes |
+| Aleatorio | 1805 | 7.434.240 bytes |
+
+Para insercion creciente y `N > L`:
 
 ```text
 hojas = 1 + ceil((N - L) / ceil((L + 1)/2))
 ```
 
-Con `N = 1.000.000` y `L = 255` da 7812 hojas. Con 300.000 da 2343.
+Con `L = 255`, predice 2343 hojas para 300.000 claves.
 
-### 54. ¿Por que la insercion aleatoria ocupa mejor las hojas?
+### Tabla C: busqueda indexada contra secuencial
 
-Las inserciones se distribuyen entre muchas hojas parcialmente llenas en lugar de concentrarse siempre en la ultima. En la Tabla A la ocupacion ronda 69-72 %, frente a aproximadamente 50 % en creciente.
+- B+ existente: 3 paginas de indice y 1 registro de datos.
+- B+ inexistente: 3 paginas de indice y 0 registros de datos.
+- Secuencial: en promedio recorre gran parte del archivo; una inexistente lee los 300.000 registros.
 
-### 55. Relacione ocupacion, tamano del indice y altura usando sus tablas.
+La busqueda secuencial es `Theta(N)` y la indexada es `Theta(log_M N)`.
 
-Con IMDb creciente se obtuvieron 2343 hojas y 9.658.368 bytes; con orden aleatorio, 1805 hojas y 7.434.240 bytes. La mejor ocupacion reduce paginas. Tambien puede reducir niveles: en la Tabla A, para `P = 2048`, creciente usa 4 niveles y aleatorio 3.
-
-### 56. ¿En que orden llegan originalmente las claves de IMDb?
-
-En orden creciente de `tconst`. Por eso la construccion normal reproduce el caso de ocupacion cercana al 50 %. `--aleatorio` mantiene `datos.dat` en el orden original, pero baraja con Fisher-Yates los arreglos paralelos de claves y posiciones antes de insertar el indice.
-
-### 57. ¿Por que se cuentan paginas y no solamente tiempo?
-
-El tiempo depende del hardware, la carga y el cache del sistema operativo. Las paginas transferidas dependen del algoritmo y representan el costo de un disco frio. Los tiempos se reportan, pero la conclusion se fundamenta en E/S.
-
-### 58. Compare la busqueda secuencial y el indice usando la Tabla C.
-
-El B+ lee siempre 3 paginas de indice y, si encuentra la clave, un registro de datos. La secuencial leyo en promedio 152.493,280 registros para existentes y 300.000 para inexistentes. La secuencial es `Theta(N)` y el indice `Theta(log_M N)`.
-
-### 59. Exprese el costo de una consulta por rango.
+### Tabla D: rangos
 
 Con altura `h`, `s` resultados, ocupacion media `rho` y capacidad `L`, el costo esperado es:
 
 ```text
-h - 1 + Theta(1 + s/(rho*L)) paginas
+h - 1 + Theta(1 + s/(rho * L)) paginas
 ```
 
-Se leen los internos una vez y luego las hojas necesarias. Hacer `s` busquedas independientes costaria `Theta(s log_M N)` paginas.
+Se pagan los internos una sola vez y luego se recorren hojas. Para ancho 10.000 se entregaron en
+promedio 9351,750 registros y se leyeron 75,990 paginas, de las cuales 73,990 fueron hojas.
 
-### 60. Interprete la fila de rango de ancho 10.000.
+### Por que medir paginas y tiempo
 
-Entrega en promedio 9351,750 registros y lee 75,990 paginas, de las cuales 73,990 son hojas. No recorre un camino por resultado: paga 2 internos una vez y despues avanza por hojas enlazadas.
+El tiempo cambia por hardware y cache del sistema operativo. La cantidad de paginas depende del
+algoritmo y representa mejor el costo de un disco frio. Por eso se informan ambos, pero el analisis
+se fundamenta en paginas.
 
-## 5. Modificaciones propuestas en vivo - 3 puntos
+## 10. `datos.dat`, comandos y pruebas
 
-### 61. Si el rango debiera ser `[desde, hasta)`, ¿que cambiaria?
+### Formato de `datos.dat`
 
-La entrega debe detenerse cuando `clave >= hasta`, no cuando `clave > hasta`. La regla para pasar a la siguiente hoja cambia de `ultima < hasta` a la misma condicion estricta, que ya expresa que todavia puede haber claves menores que `hasta`. Tambien deben ajustarse pruebas y documentacion.
+```text
+long clave | int largo | largo bytes UTF-8 de la linea TSV
+```
 
-### 62. Si un duplicado debiera actualizar la posicion, ¿que cambiaria?
+`agregar` devuelve el byte donde empieza la clave. Esa posicion es el valor almacenado en la hoja
+del B+.
 
-Al encontrar la clave en la hoja se reemplaza su posicion y se escribe esa unica hoja. Se retorna segun el nuevo contrato, no aumenta `cantidadClaves`, no hay split y el costo es `h` lecturas y 1 escritura.
+- `leer(pos)` hace acceso directo con `seek`.
+- `busquedaSecuencial(clave)` recorre desde el primer registro.
 
-### 63. Si la posicion del registro pasara de `long` a `int`, ¿que debe revisarse?
+### Comandos para una demostracion
 
-Cambian el formato de hoja, sus offsets, la formula de `L`, lectura, escritura, `Nodo.posiciones`, interfaces y compatibilidad de version. Cada par pasaria de 16 a 12 bytes. Los indices existentes no se pueden abrir como si tuvieran el formato nuevo; habria que cambiar la version o migrarlos.
+```powershell
+javac -encoding UTF-8 *.java
+java TestArbolBMas
+java BMasApp verificar
+java BMasApp info
+java BMasApp buscar 111161
+java BMasApp rango 100000 100999 10
+java BMasApp secuencial 111161
+java BMasApp pagina 345
+```
 
-### 64. Si se agregara un cache LRU de paginas, ¿que debe preservar?
+Para construir desde IMDb:
 
-Las busquedas deben pedir paginas al cache; los contadores solo aumentan cuando hay E/S real. Debe existir modo sin cache para las mediciones. Las paginas modificadas necesitan una politica clara de escritura y `close` debe vaciar cambios pendientes sin romper persistencia.
+```powershell
+java BMasApp construir title.basics.tsv.gz
+```
 
-### 65. Si se implementara eliminacion, ¿que casos aparecen?
+El TSV se usa solamente para construir. Los demas comandos abren en ejecuciones separadas los
+archivos persistentes que necesitan: `buscar` y `rango` usan ambos, `secuencial` usa `datos.dat`,
+y `info`, `verificar` y `pagina` usan `indice.dat`. Ninguno vuelve a leer el TSV.
 
-Eliminar de hoja, actualizar separadores si cambia la primera clave de un hijo, redistribuir con hermanos, fusionar cuando no se alcanza ocupacion minima, reparar la cadena de hojas y reducir altura si la raiz interna queda con un solo hijo. Tambien cambian cantidad de claves, cabecera, E/S y pruebas.
+### Que cubren los 12 casos
 
-### 66. Si se cambia `P` de 4096 a 128, ¿que ocurre?
+1. Arbol vacio.
+2. Inserciones sin split.
+3. Split de raiz hoja y de hoja intermedia.
+4. Split interno.
+5. Nueva raiz.
+6. Tres niveles.
+7. Busquedas extremas y camino.
+8. Clave inexistente y duplicado.
+9. Rango dentro de una hoja.
+10. Rangos entre hojas y regla de parada.
+11. Cierre, reapertura y archivo invalido.
+12. Busquedas despues de reabrir.
 
-Las formulas producen `M = 10` y `L = 7`. Disminuye el fan-out, aumentan las paginas y la altura. En la Tabla A creciente con un millon de claves llega a 8 niveles y aleatorio a 7.
+## 11. Cambios que puede pedir el docente
 
-### 67. Si se quisiera usar little-endian, ¿basta cambiar `ByteBuffer`?
+No memoricen codigo. Expliquen primero que contrato y formato cambia.
 
-No. Tambien deben cambiarse todas las lecturas y escrituras de cabecera realizadas directamente con `RandomAccessFile`, definir una nueva version de formato y evitar abrir archivos antiguos con la interpretacion nueva.
+### Rango `[desde, hasta)`
 
-### 68. Si se pide validar todo el archivo durante `abrir`, ¿que cambiaria?
+Se deja de entregar cuando `clave >= hasta`. Hay que ajustar la condicion, las pruebas y la
+documentacion.
 
-Despues de validar la cabecera se ejecutaria una validacion equivalente a `verificarInvariantes`. Eso detectaria nodos corruptos al abrir, pero dejaria de cumplirse el contrato actual de leer solo la cabecera y tendria costo lineal en paginas.
+### Duplicado que actualiza la posicion
 
-### 69. Si `buscarRango` hiciera una busqueda desde la raiz por cada clave, ¿por que estaria mal?
+Se reemplaza la posicion en la hoja y se escribe esa unica pagina. No aumenta la cantidad de
+claves ni provoca split: `h` lecturas y 1 escritura.
 
-Aunque pudiera devolver los mismos resultados, violaria el algoritmo pedido. Costaria `Theta(s log_M N)` paginas en lugar de un descenso mas un recorrido secuencial de hojas.
+### Posicion de `long` a `int`
 
-### 70. ¿Como agregaria una suma de verificacion por pagina?
+Cambia el formato de hoja, los offsets, la formula de `L`, los arreglos y la version del archivo.
+No se puede interpretar silenciosamente un indice viejo con el nuevo formato.
 
-Reservaria bytes en un formato nuevo, recalcularia `M` y `L`, escribiria el checksum al guardar y lo validaria al leer. Se debe incrementar la version porque cambian offsets o capacidad y decidir si el checksum incluye sus propios bytes como cero.
+### Cache LRU de paginas
 
-## 6. Dominio del resto del proyecto - 2 puntos y requisito individual
+Los contadores deben aumentar solo ante E/S real. Hace falta un modo sin cache para los
+experimentos y una politica de escritura que preserve la persistencia.
 
-### 71. ¿Que guarda `datos.dat`?
+### Eliminacion
 
-Registros variables consecutivos: `long clave`, `int largo` y `largo` bytes UTF-8 de la linea TSV sin salto. La posicion retornada por `agregar` es el byte donde empieza la clave y es el valor almacenado en la hoja del indice.
+Aparecen redistribucion, fusion, actualizacion de separadores, reparacion de la cadena de hojas y
+reduccion de altura cuando la raiz queda con un solo hijo.
 
-### 72. ¿Que diferencia hay entre `leer` y `busquedaSecuencial`?
+### Cambiar `P` de 4096 a 128
 
-`leer(pos)` hace un `seek` directo a una posicion conocida y lee un registro. `busquedaSecuencial(clave)` empieza en cero y salta registro por registro hasta encontrar la clave o llegar al final.
+Las formulas dan `M = 10` y `L = 7`. Al bajar el fan-out, aumentan la cantidad de paginas y la
+altura.
 
-### 73. ¿Por que `BMasApp buscar` funciona en una ejecucion separada de `construir`?
+### Validar todo durante `abrir`
 
-Porque abre `indice.dat` y `datos.dat`; no conserva objetos del proceso constructor ni vuelve a leer el TSV. El indice persistente devuelve la posicion y `ArchivoDatos.leer` recupera la linea.
+Se podria llamar a una validacion equivalente a `verificarInvariantes`, pero `abrir` dejaria de leer
+solo la cabecera y pasaria a tener costo lineal en paginas.
 
-### 74. ¿Por que se reinician los contadores despues de obtener `caminoBusqueda`?
+## 12. Preguntas esenciales para practicar
 
-`caminoBusqueda` realiza lecturas reales. En `BMasApp buscar` se usa para mostrar el camino, pero luego se reinicia el contador para que las paginas informadas correspondan solo a `buscar` y no se duplique la medicion.
+Respondan cada una en menos de un minuto:
 
-### 75. ¿Como se construye el orden aleatorio de forma reproducible?
+1. ¿Por que el arbol es persistente y no una estructura serializada?
+2. ¿Como se localiza fisicamente la pagina `k`?
+3. ¿Que informacion minima necesita la cabecera para reabrir el arbol?
+4. Deduzca `L` y `M` sin mirar el codigo.
+5. ¿Por que la igualdad con un separador baja a la derecha?
+6. ¿Por que buscar una clave inexistente cuesta la misma cantidad de paginas?
+7. ¿Que se copia en un split de hoja y que se mueve en un split interno?
+8. Trace `insertar(45)` e indique paginas nuevas, lecturas y escrituras.
+9. ¿Por que una hoja intermedia debe reenlazarse en un orden preciso?
+10. ¿Por que un duplicado escribe cero paginas?
+11. ¿Por que un rango no vuelve a la raiz por cada resultado?
+12. Enumere I1-I5 con sus propias palabras.
+13. ¿Como se abre el indice sin leer el TSV?
+14. ¿Por que 300.000 claves caben en tres niveles con `P = 4096`?
+15. ¿Por que IMDb creciente ocupa cerca del 50 %?
+16. ¿Que diferencia hay entre `datos.dat` e `indice.dat`?
+17. ¿Que demuestra cada tabla experimental?
+18. ¿Por que se cuentan paginas y no solo microsegundos?
+19. ¿Que estructuras de Java estan prohibidas y que usa el proyecto en su lugar?
+20. ¿Que parte declarada con ayuda de IA pueden explicar y modificar en vivo?
 
-Se usa Fisher-Yates con `Random(2026)`. En `BMasApp` se intercambian en paralelo clave y posicion para no perder su asociacion. Una semilla fija permite reproducir tablas.
+## 13. Simulacro de defensa de 15 minutos
 
-### 76. ¿Que mide cada tabla experimental?
-
-Tabla A: estructura para seis `P`, en orden creciente y aleatorio. Tabla B: construccion IMDb en ambos ordenes. Tabla C: busquedas B+ existentes/inexistentes y secuenciales. Tabla D: consultas por rango para cuatro anchos.
-
-### 77. ¿Por que primero se obtienen todas las claves para la Tabla C?
-
-Permite seleccionar existentes uniformemente y generar inexistentes dentro del rango descartando por busqueda binaria. Se permite porque el experimento puede usar un arreglo de claves; no cambia que el arbol operativo viva en disco.
-
-### 78. ¿Que estructuras prohibidas evita la solucion?
-
-No usa colecciones de `java.util`, `Arrays.*`, `Collections.*` ni `System.arraycopy`. Usa arreglos nativos, `RandomAccessFile`, `ByteBuffer`, flujos y `Random`, todos permitidos por la guia.
-
-### 79. ¿Que partes se declararon asistidas por IA?
-
-La implementacion se declaro manual. La IA se uso para revisar formato, reglas de busqueda y splits, rango, persistencia, invariantes, comandos, experimentos y analisis; `TestArbolBMas` fue elaborado con ayuda de IA para organizar la cobertura. Hay que poder explicar cualquiera de esas partes, especialmente las declaradas con asistencia.
-
-### 80. ¿Que demuestran los 12 casos de `TestArbolBMas`?
-
-Cubren arbol vacio, inserciones sin split, splits de hoja raiz e intermedia, split interno, raiz nueva, tres niveles, busquedas extremas y camino, ausencia y duplicado, rangos de una y varias hojas, regla de parada, rango invalido, persistencia, archivo invalido y consultas despues de reabrir. Ademas comparan la traza, R/W e invariantes tras cada insercion.
-
-## Simulacro practico de 15 minutos
-
-Un companero actua como docente y elige al azar quien responde cada bloque.
+Un integrante actua como docente. Elijan al azar quien responde cada bloque.
 
 ### Minutos 0-3: representacion
 
-1. Dibuje una hoja y un interno para `P = 60` con offsets.
-2. Deduzca `L` y `M` sin mirar apuntes.
-3. Explique como se localiza fisicamente la pagina 7.
+1. Dibuje cabecera, hoja e interno para `P = 60`.
+2. Deduzca `L = 3` y `M = 4`.
+3. Explique como se lee la pagina 7.
 
 ### Minutos 3-8: traza
 
 1. Dibuje el arbol anterior a `insertar(45)`.
-2. Marque las dos paginas leidas.
-3. Ejecute el split de hoja y diga que clave se copia.
-4. Ejecute el split interno y diga que clave se mueve.
+2. Marque `#3` y `#5` como paginas leidas.
+3. Divida la hoja y copie 40.
+4. Divida el interno y mueva 50.
 5. Asigne `#6`, `#7`, `#8` y justifique 5 escrituras.
 
 ### Minutos 8-11: persistencia
 
-1. Cierre y reabra el indice.
-2. Diga que campos permiten encontrar la raiz.
-3. Explique por que no se reconstruye desde `datos.dat`.
+1. Ejecute `java BMasApp verificar`.
+2. Explique que campos permiten encontrar la raiz.
+3. Explique por que no se reconstruye desde el TSV.
 
 ### Minutos 11-13: resultados
 
-1. Explique por que IMDb creciente ocupa cerca del 50 %.
-2. Compare 3 paginas B+ con la busqueda secuencial.
-3. Explique una fila de la Tabla D.
+1. Explique la ocupacion de IMDb creciente.
+2. Compare 3 paginas del B+ con una busqueda secuencial.
+3. Interprete una fila de la Tabla D.
 
 ### Minutos 13-15: cambio en vivo
 
-Elegir una de estas consignas:
+El docente elige uno:
 
-- Hacer el limite superior del rango exclusivo.
-- Actualizar la posicion al insertar un duplicado.
-- Cambiar la posicion de `long` a `int`.
+- Limite superior exclusivo.
+- Actualizar un duplicado.
+- Cambiar `long posicion` por `int`.
 - Agregar un cache desactivable.
-- Describir eliminacion con fusion.
+- Agregar eliminacion.
 
-## Lista de control individual
+## 14. Lista de control individual
 
-Antes de la defensa, cada integrante deberia poder hacer sin ayuda:
+Cada integrante debe poder hacer esto sin ayuda:
 
+- [ ] Explicar el mapa `TSV -> datos.dat + indice.dat`.
 - [ ] Deducir `L` y `M` para cualquier `P`.
-- [ ] Dibujar byte a byte cabecera, hoja e interno.
-- [ ] Explicar `buscarHijo` y el caso de igualdad.
-- [ ] Trazar `insertar(45)` con paginas, claves, R y W.
-- [ ] Explicar la diferencia entre copiar en hoja y mover en interno.
-- [ ] Trazar los dos rangos de la guia y su regla de parada.
+- [ ] Dibujar cabecera, hoja e interno con sus offsets.
+- [ ] Explicar la eleccion de hijo y el caso de igualdad.
+- [ ] Trazar `buscar(35)` y `insertar(45)`.
+- [ ] Explicar la diferencia entre copiar y mover una clave.
+- [ ] Trazar `buscarRango(22, 62)` y su regla de parada.
 - [ ] Enumerar I1-I5 y explicar como se verifican.
-- [ ] Demostrar cierre y reapertura sin TSV.
-- [ ] Derivar las cotas de altura y los costos asintoticos.
-- [ ] Interpretar al menos una fila de cada tabla propia.
+- [ ] Cerrar y reabrir sin usar el TSV.
+- [ ] Explicar altura, fan-out y costo de E/S.
+- [ ] Interpretar una fila de cada tabla.
 - [ ] Explicar `ArchivoDatos`, `BMasApp`, `ExperimentoBMas` y las pruebas.
 - [ ] Resolver verbalmente una modificacion no ensayada.
+
+## 15. Frases que conviene evitar
+
+| Respuesta debil | Respuesta mejor |
+|---|---|
+| "Busca recursivamente" | "Lee una pagina por nivel y elige el hijo con limite superior" |
+| "Divide por la mitad" | "La hoja izquierda conserva `ceil((L+1)/2)` y copia el separador" |
+| "Se guarda cuando cierro" | "Cada insercion escribe las paginas modificadas antes de retornar" |
+| "El rango busca todas" | "Baja una vez y continua por la cadena de hojas" |
+| "Es mas rapido" | "Reduce de `Theta(N)` registros a `Theta(log_M N)` paginas" |
+
+La meta no es repetir estas frases de memoria. Hay que poder dibujarlas, justificarlas y relacionarlas
+con una ejecucion real del programa.
