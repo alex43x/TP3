@@ -1,0 +1,6 @@
+tconst	titleType	primaryTitle	originalTitle	isAdult	startYear	endYear	runtimeMinutes	genres
+tt0000001	short	Uno	Uno	0	1900	\N	1	Short
+tt0000003	short	Tres	Tres	0	1901	\N	2	Short
+tt0000007	movie	Siete	Siete	0	1902	\N	70	Drama
+tt0000010	movie	Diez	Diez	0	1903	\N	80	Comedy
+tt0000020	movie	Veinte	Veinte	0	1904	\N	90	Drama
